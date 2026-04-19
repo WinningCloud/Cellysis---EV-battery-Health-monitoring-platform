@@ -10,6 +10,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import './App.css'
 
 const FILE_1_ERROR =
   'File 1 format not recognized. Expected Arbin cycler export format.'
@@ -29,6 +30,19 @@ function formatSohPercent(value) {
     return '--'
   }
   return `${Math.min(value, 100).toFixed(2)}%`
+}
+
+function getSohBand(value) {
+  if (!Number.isFinite(value)) {
+    return 'unknown'
+  }
+  if (value >= 80) {
+    return 'good'
+  }
+  if (value >= 60) {
+    return 'warn'
+  }
+  return 'bad'
 }
 
 function formatSeconds(totalSeconds) {
@@ -454,6 +468,7 @@ function buildCurrentDebug(rows) {
   const headerIndex = getHeaderIndex(rows)
   const workbookKind = getWorkbookKind(rows)
   const dischargeHeader = resolveHeaderKey(headerIndex, ['dischargecapacityah'])
+  const cycleHeader = resolveHeaderKey(headerIndex, ['cycleindex'])
   const testTimeHeader = resolveHeaderKey(headerIndex, ['testtimes'])
   const dateTimeHeader = resolveHeaderKey(headerIndex, ['datetime'])
   const durationHeader =
@@ -547,9 +562,12 @@ function App() {
   const [baselineFile, setBaselineFile] = useState(null)
   const [testFile, setTestFile] = useState(null)
   const [analysis, setAnalysis] = useState(null)
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const [warningMessage, setWarningMessage] = useState('')
-  const [showMetrics, setShowMetrics] = useState(false)
+  const [showRawMetrics, setShowRawMetrics] = useState(false)
+  const [showDebug, setShowDebug] = useState(false)
+  const [dragTarget, setDragTarget] = useState(null)
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', isDarkMode)
@@ -582,6 +600,7 @@ function App() {
     }
 
     try {
+      setIsAnalyzing(true)
       setErrorMessage('')
       setWarningMessage('')
 
@@ -660,255 +679,297 @@ function App() {
     } catch (error) {
       setAnalysis(null)
       setErrorMessage(error instanceof Error ? error.message : 'Failed to analyze files.')
+    } finally {
+      setIsAnalyzing(false)
     }
   }, [baselineFile, testFile])
 
-  const sohTone = useMemo(() => {
+  const sohBand = useMemo(() => {
     if (!analysis) {
-      return 'text-slate-900 dark:text-white'
+      return 'unknown'
     }
-    if (analysis.sohCapped >= 80) {
-      return 'text-emerald-600 dark:text-emerald-400'
-    }
-    if (analysis.sohCapped >= 60) {
-      return 'text-amber-600 dark:text-amber-400'
-    }
-    return 'text-red-600 dark:text-red-400'
+    return getSohBand(analysis.sohCapped)
   }, [analysis])
 
+  const tooltipStyles = useMemo(() => {
+    return {
+      backgroundColor: isDarkMode ? '#0f172a' : '#f8fafc',
+      border: isDarkMode ? '1px solid #1e293b' : '1px solid #cbd5e1',
+      borderRadius: '12px',
+      boxShadow: isDarkMode
+        ? '0 12px 28px rgba(2, 6, 23, 0.5)'
+        : '0 12px 28px rgba(15, 23, 42, 0.15)',
+      color: isDarkMode ? '#e2e8f0' : '#0f172a',
+    }
+  }, [isDarkMode])
+
+  const canAnalyze = Boolean(baselineFile && testFile)
+
+  const cardStateClass = useCallback(
+    (type) => {
+      const isLoaded = type === 'baseline' ? baselineFile : testFile
+      const isDragging = dragTarget === type
+      return [
+        'upload-card',
+        isLoaded ? 'upload-card--loaded' : '',
+        isDragging ? 'upload-card--drag' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')
+    },
+    [baselineFile, testFile, dragTarget],
+  )
+
+  const handleDrop = useCallback((event, type) => {
+    event.preventDefault()
+    setDragTarget(null)
+    const file = event.dataTransfer?.files?.[0]
+    handleFilePick(file, type)
+  }, [handleFilePick])
+
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-800 transition-colors dark:bg-slate-950 dark:text-slate-100">
-      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-        <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold text-slate-900 dark:text-white">Cellysis</h1>
-            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-              Battery State of Health Analyzer
-            </p>
+    <div className="app-shell">
+      <div className="app-backdrop" aria-hidden="true" />
+
+      <main className="app-container">
+        <header className="top-header card-surface">
+          <div className="top-header__identity">
+            <h1 className="top-header__title">Cellysis</h1>
+            <p className="top-header__subtitle">Battery State of Health Analyzer</p>
           </div>
           <button
             type="button"
             onClick={() => setIsDarkMode((prev) => !prev)}
-            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:border-teal-600 hover:text-teal-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+            className="theme-toggle"
+            aria-label="Toggle dark mode"
           >
-            {isDarkMode ? 'Light Mode' : 'Dark Mode'}
+            <span className="theme-toggle__knob" aria-hidden="true">{isDarkMode ? '☾' : '☀'}</span>
+            <span>{isDarkMode ? 'Dark' : 'Light'} Mode</span>
           </button>
+          <div className="top-header__accent" aria-hidden="true" />
         </header>
 
-        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Step 1: Upload Test Files</h2>
+        <section className="card-surface upload-section">
+          <div className="section-title-wrap">
+            <h2 className="section-title">Step 1: Upload Test Files</h2>
+            <p className="section-subtitle">Provide baseline and current workbook exports for SOH analysis.</p>
+          </div>
 
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
-            <label className="group rounded-xl border-2 border-dashed border-slate-300 p-5 transition hover:border-teal-600 hover:bg-teal-50/60 dark:border-slate-700 dark:hover:bg-teal-950/20">
+          <div className="upload-grid">
+            <label
+              className={cardStateClass('baseline')}
+              onDragOver={(event) => {
+                event.preventDefault()
+                setDragTarget('baseline')
+              }}
+              onDragLeave={() => setDragTarget(null)}
+              onDrop={(event) => handleDrop(event, 'baseline')}
+            >
               <input
                 type="file"
                 accept=".xlsx"
                 className="hidden"
                 onChange={(event) => handleFilePick(event.target.files?.[0], 'baseline')}
               />
-              <p className="text-base font-semibold text-slate-800 dark:text-slate-100">
-                📂 Initial Capacity File
-              </p>
-              <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                Arbin cycler export
-              </p>
-              {baselineFile ? (
-                <p className="mt-3 text-sm font-medium text-emerald-600 dark:text-emerald-400">
-                  ✅ {baselineFile.name}
-                </p>
-              ) : (
-                <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">Select .xlsx file</p>
-              )}
+              <div className="upload-card__head">
+                <span className="upload-icon" aria-hidden="true">⇪</span>
+                <div>
+                  <p className="upload-card__title">Initial Capacity File</p>
+                  <p className="upload-card__subtitle">Arbin cycler export workbook</p>
+                </div>
+              </div>
+
+              <div className="upload-card__picker">
+                <span>Drop .xlsx here or click to browse</span>
+              </div>
+
+              <div className="upload-status">
+                {baselineFile ? (
+                  <>
+                    <span className="status-check" aria-hidden="true">✓</span>
+                    <span className="upload-filename">{baselineFile.name}</span>
+                  </>
+                ) : (
+                  <span className="upload-empty">No file selected</span>
+                )}
+              </div>
             </label>
 
-            <label className="group rounded-xl border-2 border-dashed border-slate-300 p-5 transition hover:border-teal-600 hover:bg-teal-50/60 dark:border-slate-700 dark:hover:bg-teal-950/20">
+            <label
+              className={cardStateClass('test')}
+              onDragOver={(event) => {
+                event.preventDefault()
+                setDragTarget('test')
+              }}
+              onDragLeave={() => setDragTarget(null)}
+              onDrop={(event) => handleDrop(event, 'test')}
+            >
               <input
                 type="file"
                 accept=".xlsx"
                 className="hidden"
                 onChange={(event) => handleFilePick(event.target.files?.[0], 'test')}
               />
-              <p className="text-base font-semibold text-slate-800 dark:text-slate-100">
-                📂 Current Capacity File
-              </p>
-              <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                Current test (Duration/mV/mA format)
-              </p>
-              {testFile ? (
-                <p className="mt-3 text-sm font-medium text-emerald-600 dark:text-emerald-400">
-                  ✅ {testFile.name}
-                </p>
-              ) : (
-                <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">Select .xlsx file</p>
-              )}
+              <div className="upload-card__head">
+                <span className="upload-icon" aria-hidden="true">⇪</span>
+                <div>
+                  <p className="upload-card__title">Current Capacity File</p>
+                  <p className="upload-card__subtitle">Duration/mV/mA workbook</p>
+                </div>
+              </div>
+
+              <div className="upload-card__picker">
+                <span>Drop .xlsx here or click to browse</span>
+              </div>
+
+              <div className="upload-status">
+                {testFile ? (
+                  <>
+                    <span className="status-check" aria-hidden="true">✓</span>
+                    <span className="upload-filename">{testFile.name}</span>
+                  </>
+                ) : (
+                  <span className="upload-empty">No file selected</span>
+                )}
+              </div>
             </label>
           </div>
 
-          {baselineFile && testFile && (
-            <div className="mt-5 flex justify-center">
+          {canAnalyze && (
+            <div className="analyze-wrap">
               <button
                 type="button"
                 onClick={analyzeFiles}
-                className="rounded-lg bg-teal-600 px-8 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-700"
+                disabled={isAnalyzing}
+                className="analyze-button"
               >
-                Analyze
+                {isAnalyzing ? 'Analyzing...' : 'Analyze'}
               </button>
             </div>
           )}
 
-          {errorMessage && (
-            <p className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">
-              {errorMessage}
-            </p>
-          )}
-
+          {errorMessage && <p className="status-alert status-alert--error">{errorMessage}</p>}
           {warningMessage && !errorMessage && (
-            <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-700 dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-300">
-              {warningMessage}
-            </p>
+            <p className="status-alert status-alert--warn">{warningMessage}</p>
           )}
         </section>
 
         {analysis && (
-          <section className="mt-6 space-y-6">
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-              <article className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                <p className="text-sm text-slate-500 dark:text-slate-300">SOH</p>
-                <p className={`mt-2 text-3xl font-bold ${sohTone}`}>
-                  {formatSohPercent(analysis.sohRaw)}
-                </p>
+          <section className="results-flow">
+            <div className="kpi-grid">
+              <article className="card-surface kpi-card">
+                <p className="kpi-label">SOH</p>
+                <p className={`kpi-value kpi-value--${sohBand}`}>{formatSohPercent(analysis.sohRaw)}</p>
+                <p className="kpi-caption">State of health ratio</p>
               </article>
 
-              <article className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                <p className="text-sm text-slate-500 dark:text-slate-300">Initial Capacity (Q_initial)</p>
-                <p className="mt-2 text-2xl font-bold text-slate-900 dark:text-white">
-                  {formatNumber(analysis.qInitial)} Ah
-                </p>
-                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Baseline</p>
+              <article className="card-surface kpi-card">
+                <p className="kpi-label">Initial Capacity (Q_initial)</p>
+                <p className="kpi-value">{formatNumber(analysis.qInitial)} Ah</p>
+                <p className="kpi-caption">Baseline</p>
               </article>
 
-              <article className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                <p className="text-sm text-slate-500 dark:text-slate-300">Current Capacity (Q_current)</p>
-                <p className="mt-2 text-2xl font-bold text-slate-900 dark:text-white">
-                  {formatNumber(analysis.qCurrent)} Ah
-                </p>
-                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Measured</p>
+              <article className="card-surface kpi-card">
+                <p className="kpi-label">Current Capacity (Q_current)</p>
+                <p className="kpi-value">{formatNumber(analysis.qCurrent)} Ah</p>
+                <p className="kpi-caption">Measured</p>
               </article>
 
-              <article className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                <p className="text-sm text-slate-500 dark:text-slate-300">Avg Internal Resistance</p>
-                <p className="mt-2 text-2xl font-bold text-slate-900 dark:text-white">
+              <article className="card-surface kpi-card">
+                <p className="kpi-label">Avg Internal Resistance</p>
+                <p className="kpi-value">
                   {Number.isFinite(analysis.avgResistanceOhm)
                     ? `${formatNumber(analysis.avgResistanceOhm * 1000, 2)} mΩ`
                     : '--'}
                 </p>
+                <p className="kpi-caption">Cell average resistance</p>
               </article>
             </div>
 
-            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
-                  Discharge Capacity per Cycle
-                </h3>
-                <p className="text-sm text-slate-500 dark:text-slate-400">
-                  Capacity Fade: {formatNumber(analysis.capacityFade)} Ah
-                </p>
+            <article className="card-surface chart-card">
+              <div className="chart-head">
+                <h3 className="section-title">Discharge Capacity per Cycle</h3>
+                <p className="chart-caption">Capacity Fade: {formatNumber(analysis.capacityFade)} Ah</p>
               </div>
-              <div className="h-80 w-full rounded-lg bg-white dark:bg-slate-900">
+
+              <div className="chart-wrap">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={analysis.cycleData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#94a3b8" opacity={0.25} />
+                  <LineChart data={analysis.cycleData} margin={{ top: 20, right: 25, left: 10, bottom: 20 }}>
+                    <CartesianGrid strokeDasharray="4 4" stroke={isDarkMode ? '#334155' : '#cbd5e1'} />
                     <XAxis
                       dataKey="cycle"
-                      tick={{ fill: isDarkMode ? '#e2e8f0' : '#334155' }}
+                      tick={{ fill: isDarkMode ? '#cbd5e1' : '#334155', fontSize: 12 }}
+                      tickLine={false}
+                      axisLine={{ stroke: isDarkMode ? '#334155' : '#cbd5e1' }}
                       label={{
                         value: 'Cycle Number',
                         position: 'insideBottom',
-                        offset: -5,
-                        fill: isDarkMode ? '#cbd5e1' : '#475569',
+                        offset: -10,
+                        fill: isDarkMode ? '#94a3b8' : '#475569',
                       }}
                     />
                     <YAxis
-                      tick={{ fill: isDarkMode ? '#e2e8f0' : '#334155' }}
+                      tick={{ fill: isDarkMode ? '#cbd5e1' : '#334155', fontSize: 12 }}
+                      tickLine={false}
+                      axisLine={{ stroke: isDarkMode ? '#334155' : '#cbd5e1' }}
                       label={{
                         value: 'Discharge Capacity (Ah)',
                         angle: -90,
                         position: 'insideLeft',
-                        fill: isDarkMode ? '#cbd5e1' : '#475569',
+                        fill: isDarkMode ? '#94a3b8' : '#475569',
                       }}
                     />
                     <Tooltip
+                      contentStyle={tooltipStyles}
                       formatter={(value) => `${Number(value).toFixed(3)} Ah`}
                       labelFormatter={(label) => `Cycle ${label}`}
                     />
                     <ReferenceLine
                       y={analysis.qInitial}
                       stroke="#dc2626"
-                      strokeDasharray="7 4"
-                      label={{
-                        value: 'Baseline (100% SOH)',
-                        fill: '#dc2626',
-                        position: 'insideTopRight',
-                      }}
+                      strokeDasharray="8 5"
+                      label={{ value: 'Baseline (100% SOH)', fill: '#dc2626', position: 'right' }}
                     />
                     <ReferenceLine
                       y={analysis.qInitial * 0.8}
                       stroke="#f59e0b"
-                      strokeDasharray="7 4"
-                      label={{
-                        value: 'EOL threshold (80% SOH)',
-                        fill: '#f59e0b',
-                        position: 'insideBottomRight',
-                      }}
+                      strokeDasharray="8 5"
+                      label={{ value: 'EOL threshold (80% SOH)', fill: '#f59e0b', position: 'right' }}
                     />
                     <Line
                       type="monotone"
                       dataKey="dischargeCapacity"
                       stroke="#0d9488"
-                      strokeWidth={2.5}
-                      dot={{ r: 2 }}
-                      activeDot={{ r: 5 }}
+                      strokeWidth={2.6}
+                      dot={{ r: 1.8, strokeWidth: 0, fill: '#0d9488' }}
+                      activeDot={{ r: 4.5, fill: '#14b8a6', stroke: '#0f172a', strokeWidth: 1 }}
                     />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
-            </div>
+            </article>
 
-            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-              <h3 className="mb-3 text-lg font-semibold text-slate-900 dark:text-white">Cycle Table</h3>
-              <div className="max-h-72 overflow-auto rounded-lg border border-slate-200 dark:border-slate-700">
-                <table className="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
-                  <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800">
+            <article className="card-surface table-card">
+              <h3 className="section-title">Cycle Table</h3>
+              <div className="table-scroll">
+                <table className="cycle-table">
+                  <thead>
                     <tr>
-                      <th className="px-4 py-3 text-left font-semibold text-slate-700 dark:text-slate-200">Cycle</th>
-                      <th className="px-4 py-3 text-left font-semibold text-slate-700 dark:text-slate-200">
-                        Discharge Capacity (Ah)
-                      </th>
-                      <th className="px-4 py-3 text-left font-semibold text-slate-700 dark:text-slate-200">SOH (%)</th>
-                      <th className="px-4 py-3 text-left font-semibold text-slate-700 dark:text-slate-200">
-                        Internal Resistance (mΩ)
-                      </th>
+                      <th>Cycle</th>
+                      <th>Discharge Capacity (Ah)</th>
+                      <th>SOH (%)</th>
+                      <th>Internal Resistance (mΩ)</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                  <tbody>
                     {analysis.cycleTable.map((row) => {
-                      const rowColorClass =
-                        row.sohDisplay >= 80
-                          ? 'bg-emerald-50/70 dark:bg-emerald-950/20'
-                          : row.sohDisplay >= 60
-                            ? 'bg-amber-50/70 dark:bg-amber-950/20'
-                            : 'bg-red-50/70 dark:bg-red-950/20'
-
+                      const band = getSohBand(row.sohDisplay)
                       return (
-                        <tr key={row.cycle} className={rowColorClass}>
-                          <td className="px-4 py-2 text-slate-700 dark:text-slate-200">{row.cycle}</td>
-                          <td className="px-4 py-2 text-slate-700 dark:text-slate-200">
-                            {formatNumber(row.dischargeCapacity)}
-                          </td>
-                          <td className="px-4 py-2 text-slate-700 dark:text-slate-200">
-                            {formatSohPercent(row.sohRaw)}
-                          </td>
-                          <td className="px-4 py-2 text-slate-700 dark:text-slate-200">
+                        <tr key={row.cycle} className={`row-band row-band--${band}`}>
+                          <td>{row.cycle}</td>
+                          <td>{formatNumber(row.dischargeCapacity)}</td>
+                          <td>{formatSohPercent(row.sohRaw)}</td>
+                          <td>
                             {Number.isFinite(row.internalResistanceMilliOhm)
                               ? formatNumber(row.internalResistanceMilliOhm, 2)
                               : '--'}
@@ -919,119 +980,127 @@ function App() {
                   </tbody>
                 </table>
               </div>
-            </div>
+            </article>
 
-            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <article className="card-surface collapse-panel">
               <button
                 type="button"
-                onClick={() => setShowMetrics((prev) => !prev)}
-                className="w-full rounded-lg border border-slate-300 px-4 py-2 text-left text-sm font-semibold text-slate-700 transition hover:border-teal-600 hover:text-teal-700 dark:border-slate-700 dark:text-slate-200"
+                onClick={() => setShowRawMetrics((prev) => !prev)}
+                className="collapse-toggle"
               >
-                {showMetrics ? 'Hide Extraction Debug' : 'Show Extraction Debug'}
+                <span>{showRawMetrics ? '▼' : '▶'}</span>
+                <span>Raw Metrics</span>
               </button>
 
-              {showMetrics && (
-                <div className="mt-4 space-y-4 text-sm">
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
-                      <p className="text-slate-500 dark:text-slate-400">File 1 rows read</p>
-                      <p className="mt-1 font-semibold text-slate-900 dark:text-white">
-                        {analysis.debug.baseline.rowCount}
-                      </p>
+              {showRawMetrics && (
+                <div className="collapse-content metrics-grid">
+                  <div className="mini-metric">
+                    <p>Total data points</p>
+                    <strong>{analysis.rawMetrics.totalDataPoints}</strong>
+                  </div>
+                  <div className="mini-metric">
+                    <p>Unique Cycle_Index values</p>
+                    <strong>{analysis.rawMetrics.totalCycles}</strong>
+                  </div>
+                  <div className="mini-metric">
+                    <p>Test duration</p>
+                    <strong>{formatSeconds(analysis.rawMetrics.maxTestTime)}</strong>
+                  </div>
+                  <div className="mini-metric">
+                    <p>Date range</p>
+                    <strong>{analysis.rawMetrics.dateRange}</strong>
+                  </div>
+                </div>
+              )}
+            </article>
+
+            <article className="card-surface collapse-panel">
+              <button
+                type="button"
+                onClick={() => setShowDebug((prev) => !prev)}
+                className="collapse-toggle"
+              >
+                <span>{showDebug ? '▼' : '▶'}</span>
+                <span>Extraction Verification</span>
+              </button>
+
+              {showDebug && (
+                <div className="collapse-content debug-layout">
+                  <div className="debug-card-grid">
+                    <div className="mini-metric mono-metric">
+                      <p>Detected workbook types</p>
+                      <strong>
+                        baseline={analysis.debug.detected.baselineKind} | current={analysis.debug.detected.testKind}
+                      </strong>
                     </div>
-                    <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
-                      <p className="text-slate-500 dark:text-slate-400">File 2 rows read</p>
-                      <p className="mt-1 font-semibold text-slate-900 dark:text-white">
-                        {analysis.debug.current.rowCount}
-                      </p>
+                    <div className="mini-metric mono-metric">
+                      <p>Rows read</p>
+                      <strong>
+                        file1={analysis.debug.baseline.rowCount} | file2={analysis.debug.current.rowCount}
+                      </strong>
                     </div>
-                    <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
-                      <p className="text-slate-500 dark:text-slate-400">Q_initial source</p>
-                      <p className="mt-1 font-semibold text-slate-900 dark:text-white">
-                        {analysis.debug.baseline.method}
-                      </p>
+                    <div className="mini-metric mono-metric">
+                      <p>Q_initial source and value</p>
+                      <strong>{analysis.debug.baseline.method} | {formatNumber(analysis.qInitial)} Ah</strong>
                     </div>
-                    <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
-                      <p className="text-slate-500 dark:text-slate-400">Q_current source</p>
-                      <p className="mt-1 font-semibold text-slate-900 dark:text-white">
-                        {analysis.debug.current.method}
-                      </p>
+                    <div className="mini-metric mono-metric">
+                      <p>Q_current source and value</p>
+                      <strong>
+                        {analysis.debug.current.method} | {formatNumber(analysis.debug.current.qCurrent)} Ah
+                      </strong>
                     </div>
-                    <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700 sm:col-span-2">
-                      <p className="text-slate-500 dark:text-slate-400">Detected workbook types</p>
-                      <p className="mt-1 font-semibold text-slate-900 dark:text-white">
-                        Baseline upload: {analysis.debug.detected.baselineKind} | Current upload:{' '}
-                        {analysis.debug.detected.testKind}
-                      </p>
+                    <div className="mini-metric mono-metric">
+                      <p>Rows used for extraction</p>
+                      <strong>
+                        baseline={analysis.debug.baseline.dischargeRowCount} | current={analysis.debug.current.dischargeRowCount}
+                      </strong>
                     </div>
                   </div>
 
-                  <div className="grid gap-3 sm:grid-cols-3">
-                    <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
-                      <p className="text-slate-500 dark:text-slate-400">Q_initial (debug)</p>
-                      <p className="mt-1 font-semibold text-slate-900 dark:text-white">
-                        {formatNumber(analysis.qInitial)} Ah
-                      </p>
-                    </div>
-                    <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
-                      <p className="text-slate-500 dark:text-slate-400">Q_current (debug)</p>
-                      <p className="mt-1 font-semibold text-slate-900 dark:text-white">
-                        {formatNumber(analysis.debug.current.qCurrent)} Ah
-                      </p>
-                    </div>
-                    <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
-                      <p className="text-slate-500 dark:text-slate-400">Rows used for Q_current</p>
-                      <p className="mt-1 font-semibold text-slate-900 dark:text-white">
-                        {analysis.debug.current.dischargeRowCount}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="grid gap-4 lg:grid-cols-2">
-                    <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
-                      <p className="font-semibold text-slate-900 dark:text-white">File 1 sample rows</p>
-                      <div className="mt-2 space-y-2 text-xs text-slate-600 dark:text-slate-300">
+                  <div className="debug-rows-grid">
+                    <div className="debug-sample-panel">
+                      <h4>Sample Parsed Rows - File 1</h4>
+                      <div className="debug-sample-list">
                         {analysis.debug.baseline.sampleRows.map((row) => (
-                          <div key={row.index} className="rounded border border-slate-100 p-2 dark:border-slate-800">
-                            <div>Row {row.index}</div>
+                          <div key={row.index} className="sample-chip">
+                            <div>row: {row.index}</div>
                             {analysis.debug.baseline.workbookKind === 'arbin' ? (
                               <>
-                                <div>Cycle_Index: {String(row.cycleIndex ?? '--')}</div>
-                                <div>Test_Time(s): {String(row.testTime ?? '--')}</div>
-                                <div>Date_Time: {String(row.dateTime ?? '--')}</div>
-                                <div>Step_Index: {String(row.stepIndex ?? '--')}</div>
+                                <div>cycle: {String(row.cycleIndex ?? '--')}</div>
+                                <div>test_time: {String(row.testTime ?? '--')}</div>
+                                <div>step_index: {String(row.stepIndex ?? '--')}</div>
                               </>
                             ) : (
                               <>
-                                <div>Duration: {String(row.duration ?? '--')}</div>
+                                <div>duration: {String(row.duration ?? '--')}</div>
                                 <div>mA: {String(row.currentMilliamp ?? '--')}</div>
                               </>
                             )}
-                            <div>Discharge_Capacity(Ah): {String(row.dischargeCapacityAh ?? '--')}</div>
+                            <div>q: {String(row.dischargeCapacityAh ?? '--')}</div>
                           </div>
                         ))}
                       </div>
                     </div>
 
-                    <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
-                      <p className="font-semibold text-slate-900 dark:text-white">File 2 sample rows</p>
-                      <div className="mt-2 space-y-2 text-xs text-slate-600 dark:text-slate-300">
+                    <div className="debug-sample-panel">
+                      <h4>Sample Parsed Rows - File 2</h4>
+                      <div className="debug-sample-list">
                         {analysis.debug.current.sampleRows.map((row) => (
-                          <div key={row.row} className="rounded border border-slate-100 p-2 dark:border-slate-800">
-                            <div>Row {row.row}</div>
+                          <div key={row.row} className="sample-chip">
+                            <div>row: {row.row}</div>
                             {analysis.debug.current.workbookKind === 'simple' ? (
                               <>
-                                <div>Duration: {String(row.duration ?? '--')}</div>
-                                <div>Current(A): {String(row.currentMilliamp ?? '--')}</div>
+                                <div>duration: {String(row.duration ?? '--')}</div>
+                                <div>mA: {String(row.currentMilliamp ?? '--')}</div>
                               </>
                             ) : (
                               <>
-                                <div>Cycle_Index: {String(row.cycleIndex ?? '--')}</div>
-                                <div>Test_Time(s): {String(row.testTime ?? '--')}</div>
-                                <div>Date_Time: {String(row.dateTime ?? '--')}</div>
+                                <div>cycle: {String(row.cycleIndex ?? '--')}</div>
+                                <div>test_time: {String(row.testTime ?? '--')}</div>
+                                <div>date_time: {String(row.dateTime ?? '--')}</div>
                               </>
                             )}
-                            <div>Discharge_Capacity(Ah): {String(row.dischargeCapacityAh ?? '--')}</div>
+                            <div>q: {String(row.dischargeCapacityAh ?? '--')}</div>
                           </div>
                         ))}
                       </div>
@@ -1039,7 +1108,7 @@ function App() {
                   </div>
                 </div>
               )}
-            </div>
+            </article>
           </section>
         )}
       </main>

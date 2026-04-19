@@ -4,7 +4,7 @@
 :root {
   font-family: Inter, 'Segoe UI', sans-serif;
   color: #1e293b;
-  background-color: #f1f5f9;
+  background-color: #eef3f6;
 }
 
 html,
@@ -15,4 +15,6 @@ body,
 
 body {
   margin: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
