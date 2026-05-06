@@ -10,7 +10,42 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import * as pdfjsLib from 'pdfjs-dist/build/pdf.mjs'
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url'
 import './App.css'
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
+
+async function parseSolarPDF(file) {
+  const arrayBuffer = await file.arrayBuffer()
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
+  let fullText = ''
+
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i)
+    const content = await page.getTextContent()
+    const strings = content.items.map((item) => item.str)
+    fullText += strings.join(' ') + '\n'
+  }
+
+  const regex = /(\d+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/g
+  let match
+  const data = []
+  while ((match = regex.exec(fullText)) !== null) {
+    data.push({
+      day: parseInt(match[1], 10),
+      ghi: parseFloat(match[2]),
+      temp: parseFloat(match[3]),
+      power: parseFloat(match[4]),
+    })
+  }
+
+  if (data.length === 0) {
+    throw new Error('No valid solar data found in PDF.')
+  }
+
+  return data
+}
 
 const FILE_1_ERROR =
   'File 1 format not recognized. Expected Arbin cycler export format.'
@@ -569,6 +604,11 @@ function App() {
   const [showDebug, setShowDebug] = useState(false)
   const [dragTarget, setDragTarget] = useState(null)
 
+  const [solarFile, setSolarFile] = useState(null)
+  const [solarData, setSolarData] = useState(null)
+  const [isAnalyzingSolar, setIsAnalyzingSolar] = useState(false)
+  const [solarErrorMessage, setSolarErrorMessage] = useState('')
+
   useEffect(() => {
     document.documentElement.classList.toggle('dark', isDarkMode)
   }, [isDarkMode])
@@ -593,6 +633,32 @@ function App() {
       setTestFile(file)
     }
   }, [])
+
+  const handleSolarFilePick = useCallback((file) => {
+    if (!file) return
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+      setSolarErrorMessage('Please upload a .pdf file only.')
+      return
+    }
+    setSolarErrorMessage('')
+    setSolarData(null)
+    setSolarFile(file)
+  }, [])
+
+  const analyzeSolarFile = useCallback(async () => {
+    if (!solarFile) return
+    try {
+      setIsAnalyzingSolar(true)
+      setSolarErrorMessage('')
+      const data = await parseSolarPDF(solarFile)
+      setSolarData(data)
+    } catch (err) {
+      setSolarErrorMessage(err instanceof Error ? err.message : 'Failed to analyze solar PDF.')
+      setSolarData(null)
+    } finally {
+      setIsAnalyzingSolar(false)
+    }
+  }, [solarFile])
 
   const analyzeFiles = useCallback(async () => {
     if (!baselineFile || !testFile) {
@@ -727,6 +793,13 @@ function App() {
     handleFilePick(file, type)
   }, [handleFilePick])
 
+  const handleSolarDrop = useCallback((event) => {
+    event.preventDefault()
+    setDragTarget(null)
+    const file = event.dataTransfer?.files?.[0]
+    handleSolarFilePick(file)
+  }, [handleSolarFilePick])
+
   return (
     <div className="app-shell">
       <div className="app-backdrop" aria-hidden="true" />
@@ -853,6 +926,155 @@ function App() {
             <p className="status-alert status-alert--warn">{warningMessage}</p>
           )}
         </section>
+
+        <section className="card-surface upload-section" style={{ marginTop: '2rem' }}>
+          <div className="section-title-wrap">
+            <h2 className="section-title">Step 2: Upload Solar Dataset</h2>
+            <p className="section-subtitle">Provide solar data PDF for performance graph.</p>
+          </div>
+
+          <div className="upload-grid" style={{ gridTemplateColumns: '1fr' }}>
+            <label
+              className={cardStateClass('solar') + (solarFile ? ' upload-card--loaded' : '')}
+              onDragOver={(event) => {
+                event.preventDefault()
+                setDragTarget('solar')
+              }}
+              onDragLeave={() => setDragTarget(null)}
+              onDrop={handleSolarDrop}
+            >
+              <input
+                type="file"
+                accept=".pdf"
+                className="hidden"
+                onChange={(event) => handleSolarFilePick(event.target.files?.[0])}
+              />
+              <div className="upload-card__head">
+                <span className="upload-icon" aria-hidden="true">⇪</span>
+                <div>
+                  <p className="upload-card__title">Solar Dataset PDF</p>
+                  <p className="upload-card__subtitle">PDF with Day, GHI, Temp, Power</p>
+                </div>
+              </div>
+
+              <div className="upload-card__picker">
+                <span>Drop .pdf here or click to browse</span>
+              </div>
+
+              <div className="upload-status">
+                {solarFile ? (
+                  <>
+                    <span className="status-check" aria-hidden="true">✓</span>
+                    <span className="upload-filename">{solarFile.name}</span>
+                  </>
+                ) : (
+                  <span className="upload-empty">No file selected</span>
+                )}
+              </div>
+            </label>
+          </div>
+
+          {solarFile && (
+            <div className="analyze-wrap">
+              <button
+                type="button"
+                onClick={analyzeSolarFile}
+                disabled={isAnalyzingSolar}
+                className="analyze-button"
+              >
+                {isAnalyzingSolar ? 'Analyzing...' : 'Next'}
+              </button>
+            </div>
+          )}
+
+          {solarErrorMessage && <p className="status-alert status-alert--error">{solarErrorMessage}</p>}
+        </section>
+
+        {solarData && (
+          <section className="results-flow">
+            <article className="card-surface chart-card">
+              <div className="chart-head">
+                <h3 className="section-title">Solar Dataset Metrics</h3>
+                <p className="chart-caption">GHI, Temperature, and Power over time</p>
+              </div>
+              <div className="chart-wrap" style={{ minHeight: '350px' }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={solarData} margin={{ top: 20, right: 35, left: 10, bottom: 20 }}>
+                    <CartesianGrid strokeDasharray="4 4" stroke={isDarkMode ? '#334155' : '#cbd5e1'} />
+                    <XAxis
+                      dataKey="day"
+                      tick={{ fill: isDarkMode ? '#cbd5e1' : '#334155', fontSize: 12 }}
+                      tickLine={false}
+                      axisLine={{ stroke: isDarkMode ? '#334155' : '#cbd5e1' }}
+                      label={{
+                        value: 'Day',
+                        position: 'insideBottom',
+                        offset: -10,
+                        fill: isDarkMode ? '#94a3b8' : '#475569',
+                      }}
+                    />
+                    <YAxis
+                      yAxisId="left"
+                      tick={{ fill: isDarkMode ? '#cbd5e1' : '#334155', fontSize: 12 }}
+                      tickLine={false}
+                      axisLine={{ stroke: isDarkMode ? '#334155' : '#cbd5e1' }}
+                      label={{
+                        value: 'GHI / Temp',
+                        angle: -90,
+                        position: 'insideLeft',
+                        fill: isDarkMode ? '#94a3b8' : '#475569',
+                      }}
+                    />
+                    <YAxis
+                      yAxisId="right"
+                      orientation="right"
+                      tick={{ fill: isDarkMode ? '#cbd5e1' : '#334155', fontSize: 12 }}
+                      tickLine={false}
+                      axisLine={{ stroke: isDarkMode ? '#334155' : '#cbd5e1' }}
+                      label={{
+                        value: 'Power (kWh)',
+                        angle: 90,
+                        position: 'insideRight',
+                        fill: isDarkMode ? '#94a3b8' : '#475569',
+                      }}
+                    />
+                    <Tooltip contentStyle={tooltipStyles} />
+                    <Line
+                      yAxisId="left"
+                      type="monotone"
+                      dataKey="ghi"
+                      name="GHI (W/m²)"
+                      stroke="#f59e0b"
+                      strokeWidth={2.6}
+                      dot={{ r: 1.8, strokeWidth: 0, fill: '#f59e0b' }}
+                      activeDot={{ r: 4.5, fill: '#fbbf24', stroke: '#0f172a', strokeWidth: 1 }}
+                    />
+                    <Line
+                      yAxisId="left"
+                      type="monotone"
+                      dataKey="temp"
+                      name="Temp (°C)"
+                      stroke="#ef4444"
+                      strokeWidth={2.6}
+                      dot={{ r: 1.8, strokeWidth: 0, fill: '#ef4444' }}
+                      activeDot={{ r: 4.5, fill: '#f87171', stroke: '#0f172a', strokeWidth: 1 }}
+                    />
+                    <Line
+                      yAxisId="right"
+                      type="monotone"
+                      dataKey="power"
+                      name="Power (kWh)"
+                      stroke="#3b82f6"
+                      strokeWidth={2.6}
+                      dot={{ r: 1.8, strokeWidth: 0, fill: '#3b82f6' }}
+                      activeDot={{ r: 4.5, fill: '#60a5fa', stroke: '#0f172a', strokeWidth: 1 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </article>
+          </section>
+        )}
 
         {analysis && (
           <section className="results-flow">
